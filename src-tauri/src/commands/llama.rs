@@ -35,9 +35,39 @@ impl LlamaState {
 
 /// 初始化 Llama 服务
 #[tauri::command]
-pub async fn init_llama_service(app: AppHandle, model_path: String) -> Result<(), String> {
-    // 初始化全局状态
-    // 这里需要在 Tauri state 中存储 LlamaState
+pub async fn init_llama_service(app: AppHandle, state: State<'_, Mutex<LlamaState>>) -> Result<(), String> {
+    let state_guard = state.lock().await;
+    let sidecar = state_guard.sidecar.clone();
+
+    // 获取 sidecar 路径
+    let binary_name = llama::get_platform_binary_name();
+    let binary_path = llama::get_sidecar_path(&app, binary_name)
+        .map_err(|e| e.to_string())?;
+
+    // 初始化配置
+    let config = llama::LlamaConfig {
+        model_path: std::path::PathBuf::new(),
+        context_size: 4096,
+        batch_size: 512,
+        gpu_layers: -1,
+        use_flash_attn: true,
+        threads: 8,
+        port: 8080,
+        temp: 0.7,
+        repeat_penalty: 1.1,
+    };
+
+    // 更新 sidecar 配置
+    {
+        let mut sidecar_guard = sidecar.lock().await;
+        *sidecar_guard.config.lock().await = config;
+    }
+
+    // 标记为已初始化
+    drop(state_guard);
+    let mut state_mut = state.lock().await;
+    state_mut.is_initialized = true;
+
     Ok(())
 }
 

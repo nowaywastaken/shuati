@@ -4,6 +4,7 @@
 use anyhow::{Error, Result};
 use async_stream::stream;
 use futures::stream::Stream;
+use futures::StreamExt;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -11,9 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 
 /// 模型尺寸枚举
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,15 +152,22 @@ pub fn get_sidecar_path(app: &AppHandle, binary_name: &str) -> Result<PathBuf, E
     let target_os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    let sidecar_dir = app
-        .path_resolver()
-        .resource_dir()?
-        .join("sidecars");
+    // Tauri 2.0 使用 path_resolver
+    // 注意：path_resolver 在 Tauri 2.0 中可能需要通过插件或不同方式访问
+    // 这里使用备用方案：直接使用应用目录
+    let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
+    let sidecar_dir = exe_dir.join("sidecars");
 
     let extension = if target_os == "windows" { ".exe" } else { "" };
     let file_name = format!("{}-{}-{}", binary_name, target_os, arch);
 
     Ok(sidecar_dir.join(format!("{}{}", file_name, extension)))
+}
+
+/// 获取 sidecar 路径（备用方法，使用 app 目录）
+pub fn get_sidecar_path_fallback(app: &AppHandle, binary_name: &str) -> Result<PathBuf, Error> {
+    get_sidecar_path(app, binary_name)
 }
 
 /// 获取平台特定的二进制名称
@@ -212,7 +219,7 @@ pub fn build_server_args(config: &LlamaConfig) -> Vec<String> {
 /// Llama Sidecar 进程管理器
 #[derive(Clone)]
 pub struct LlamaSidecar {
-    config: Arc<Mutex<LlamaConfig>>,
+    pub config: Arc<Mutex<LlamaConfig>>,
     child_process: Arc<Mutex<Option<Child>>>,
     server_url: Arc<Mutex<String>>,
     http_client: Arc<reqwest::Client>,
@@ -268,7 +275,7 @@ impl LlamaSidecar {
         }
 
         // 启动进程
-        let mut child = Command::new(binary_path)
+        let child = Command::new(binary_path)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -289,7 +296,7 @@ impl LlamaSidecar {
     pub async fn stop(&mut self) -> Result<(), Error> {
         let mut child_guard = self.child_process.lock().await;
         
-        if let Some(child) = child_guard.take() {
+        if let Some(mut child) = child_guard.take() {
             // 发送 SIGTERM 信号
             child.kill()?;
             
@@ -304,15 +311,10 @@ impl LlamaSidecar {
     pub async fn is_running(&self) -> Result<bool, Error> {
         let child_guard = self.child_process.lock().await;
         
-        if let Some(child) = child_guard.as_ref() {
-            match child.try_wait() {
-                Ok(Some(_)) => return Ok(false),  // 进程已退出
-                Ok(None) => {
-                    // 检查健康状态
-                    return self.is_healthy().await;
-                }
-                Err(_) => return Ok(false),
-            }
+        if child_guard.is_some() {
+            // 检查健康状态
+            drop(child_guard);
+            return self.is_healthy().await;
         }
         
         Ok(false)
@@ -388,7 +390,7 @@ impl LlamaSidecar {
     pub async fn complete_stream(
         &self,
         request: InferenceRequest,
-    ) -> impl Stream<Item = Result<InferenceResponse, Error>> + Unpin {
+    ) -> impl Stream<Item = Result<InferenceResponse, Error>> {
         let start_time = std::time::Instant::now();
         let url = format!("{}/completion", self.get_server_url().await);
 
@@ -402,7 +404,6 @@ impl LlamaSidecar {
         };
 
         let client = self.http_client.clone();
-        let base_url = self.get_server_url().await;
 
         stream! {
             let response = match client
@@ -413,48 +414,61 @@ impl LlamaSidecar {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    yield Err(Error::new(e, "Failed to send request"));
+                    yield Err(Error::msg(format!("Failed to send request: {}", e)));
                     return;
                 }
             };
 
-            let mut buf_reader = BufReader::new(response);
-            let mut line = String::new();
+            // 使用 bytes_stream 来处理流式响应
+            let mut stream = response.bytes_stream();
+            
+            let mut buffer = Vec::new();
 
-            while let Ok(n) = buf_reader.read_line(&mut line).await {
-                if n == 0 {
-                    break;
-                }
+            while let Some(chunk_result) = stream.next().await {
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        yield Err(Error::msg(format!("Failed to read chunk: {}", e)));
+                        return;
+                    }
+                };
 
-                let content = line.trim().to_string();
-                line.clear();
+                // 将字节添加到缓冲区
+                for byte in chunk.iter() {
+                    if *byte == b'\n' {
+                        let line = String::from_utf8_lossy(&buffer).trim().to_string();
+                        buffer.clear();
 
-                if content.is_empty() || !content.starts_with("data: ") {
-                    continue;
-                }
+                        if line.is_empty() || !line.starts_with("data: ") {
+                            continue;
+                        }
 
-                let json_str = &content[6..]; // Remove "data: " prefix
-                
-                if json_str == "[DONE]" {
-                    break;
-                }
-
-                match serde_json::from_str::<StreamResponse>(json_str) {
-                    Ok(stream_resp) => {
-                        let inference_time_ms = start_time.elapsed().as_millis() as u64;
-                        yield Ok(InferenceResponse {
-                            text: stream_resp.content,
-                            tokens_generated: 1,
-                            inference_time_ms,
-                        });
-
-                        if stream_resp.stop {
+                        let json_str = &line[6..]; // Remove "data: " prefix
+                        
+                        if json_str == "[DONE]" {
                             break;
                         }
-                    }
-                    Err(e) => {
-                        // 忽略解析错误，继续读取下一行
-                        continue;
+
+                        match serde_json::from_str::<StreamResponse>(json_str) {
+                            Ok(stream_resp) => {
+                                let inference_time_ms = start_time.elapsed().as_millis() as u64;
+                                yield Ok(InferenceResponse {
+                                    text: stream_resp.content,
+                                    tokens_generated: 1,
+                                    inference_time_ms,
+                                });
+
+                                if stream_resp.stop {
+                                    break;
+                                }
+                            }
+                            Err(_) => {
+                                // 忽略解析错误，继续读取下一行
+                                continue;
+                            }
+                        }
+                    } else {
+                        buffer.push(*byte);
                     }
                 }
             }
@@ -551,12 +565,12 @@ pub struct InferenceQueue {
     _receiver: Arc<Mutex<mpsc::Receiver<InferenceTask>>>,
     active_requests: Arc<AtomicUsize>,
     max_concurrent: usize,
-    llama: Arc<LlamaSidecar>,
+    llama: Arc<Mutex<LlamaSidecar>>,
 }
 
 impl InferenceQueue {
     /// 创建新的推理队列
-    pub fn new(llama: Arc<LlamaSidecar>, max_concurrent: usize) -> Self {
+    pub fn new(llama: Arc<Mutex<LlamaSidecar>>, max_concurrent: usize) -> Self {
         let (sender, receiver) = mpsc::channel(100);
         
         Self {
@@ -580,7 +594,8 @@ impl InferenceQueue {
         self.sender.send(task).await?;
         
         // 等待结果
-        response_receiver.await??
+        let result = response_receiver.await??;
+        Ok(result)
     }
 
     /// 获取活动请求数

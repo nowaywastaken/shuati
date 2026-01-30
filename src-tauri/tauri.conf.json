@@ -31,25 +31,6 @@
     "targets": "all",
     "icon": [],
     "resources": [],
-    "externalBin": [],
-    "macOS": {
-      "entitlements": null,
-      "exceptionDomain": "",
-      "frameworks": [],
-      "providerShortName": null,
-      "signingIdentity": null,
-      "sidecar": {
-        "targets": ["aarch64-apple-darwin", "x86_64-apple-darwin"]
-      }
-    },
-    "windows": {
-      "allowDowngrades": true,
-      "certificateThumbprint": null,
-      "digestAlgorithm": "sha256",
-      "timestampUrl": "",
-      "sidecar": {
-        "targets": ["x86_64-pc-windows-msvc"]
-      }
-    }
+    "externalBin": []
   }
 }

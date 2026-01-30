@@ -77,7 +77,7 @@ pub struct ProgressStats {
 
 /// 数据库服务
 pub struct DatabaseService {
-    pool: Arc<Mutex<Connection>>,
+    pub pool: Arc<Mutex<Connection>>,
     db_path: PathBuf,
 }
 
@@ -307,7 +307,7 @@ impl DatabaseService {
 
     /// 批量添加题目
     pub fn add_problems_batch(&self, problems: &[Problem]) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = self.pool.lock().unwrap();
+        let mut conn = self.pool.lock().unwrap();
         let tx = conn.transaction()?;
         
         let mut stmt = tx.prepare(
@@ -335,7 +335,7 @@ impl DatabaseService {
             ])?;
         }
 
-        stmt.finish()?;
+        drop(stmt);
         tx.commit()?;
 
         // 更新题目集总数
@@ -510,13 +510,16 @@ impl DatabaseService {
         )?;
         
         let rows = stmt.query_map(rusqlite::params![problem_id], |row| {
+            let date_str: String = row.get(5)?;
+            let attempted_at = date_str.parse::<DateTime<Utc>>()
+                .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid date format".to_string()))?;
             Ok(UserProgress {
                 id: row.get(0)?,
                 problem_id: row.get(1)?,
                 status: row.get(2)?,
                 user_answer: row.get(3)?,
                 time_spent: row.get(4)?,
-                attempted_at: row.get::<_, String>(5)?.parse::<DateTime<Utc>>()?.into(),
+                attempted_at: attempted_at.into(),
             })
         })?;
         
@@ -550,7 +553,7 @@ impl DatabaseService {
             let correct: i32 = row.get(1)?;
             let incorrect: i32 = row.get(2)?;
             let skipped: i32 = row.get(3)?;
-            let avg_time: Option<f64> = row.get(4);
+            let avg_time: Option<f64> = row.get(4)?;
             
             let accuracy_rate = if total > 0 {
                 correct as f64 / total as f64 * 100.0
@@ -655,6 +658,9 @@ impl DatabaseService {
         )?;
         
         let rows = stmt.query_map(rusqlite::params![limit], |row| {
+            let date_str: String = row.get(6)?;
+            let last_reviewed_at = date_str.parse::<DateTime<Utc>>()
+                .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid date format".to_string()))?;
             Ok(WrongNote {
                 id: row.get(0)?,
                 problem_id: row.get(1)?,
@@ -662,7 +668,7 @@ impl DatabaseService {
                 correct_answer: row.get(3)?,
                 note: row.get(4)?,
                 review_count: row.get(5)?,
-                last_reviewed_at: row.get::<_, String>(6)?.parse::<DateTime<Utc>>()?.into(),
+                last_reviewed_at: last_reviewed_at.into(),
             })
         })?;
         
@@ -703,18 +709,27 @@ impl DatabaseService {
 
     /// 从数据库行转换为 ProblemSet
     fn row_to_problem_set(row: &Row) -> Result<ProblemSet, rusqlite::Error> {
+        let date_str: String = row.get(5)?;
+        let created_at = date_str.parse::<DateTime<Utc>>()
+            .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid date format".to_string()))?;
         Ok(ProblemSet {
             id: row.get(0)?,
             title: row.get(1)?,
             description: row.get(2)?,
             file_path: row.get(3)?,
             total_problems: row.get(4)?,
-            created_at: row.get::<_, String>(5)?.parse::<DateTime<Utc>>()?.into(),
+            created_at: created_at.into(),
         })
     }
 
     /// 从数据库行转换为 Problem
     fn row_to_problem(row: &Row) -> Result<Problem, rusqlite::Error> {
+        let created_date_str: String = row.get(11)?;
+        let updated_date_str: String = row.get(12)?;
+        let created_at = created_date_str.parse::<DateTime<Utc>>()
+            .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid date format".to_string()))?;
+        let updated_at = updated_date_str.parse::<DateTime<Utc>>()
+            .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid date format".to_string()))?;
         Ok(Problem {
             id: row.get(0)?,
             set_id: row.get(1)?,
@@ -727,8 +742,8 @@ impl DatabaseService {
             difficulty: row.get(8)?,
             knowledge_tags: row.get(9)?,
             source_path: row.get(10)?,
-            created_at: row.get::<_, String>(11)?.parse::<DateTime<Utc>>()?.into(),
-            updated_at: row.get::<_, String>(12)?.parse::<DateTime<Utc>>()?.into(),
+            created_at: created_at.into(),
+            updated_at: updated_at.into(),
         })
     }
 }
