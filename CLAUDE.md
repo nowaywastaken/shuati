@@ -158,17 +158,17 @@ npm run tauri build
 - ✅ 答题评分系统（选择题、填空题、简答题）
 - ✅ 题目卡片增强（难度、标签、解析显示）
 - ✅ Dashboard 统计面板
-- ✅ OpenAI 配置支持
+- ✅ Settings 页面（API Key 配置 UI）
 
 ### AI 集成
 - ✅ Structured Outputs JSON Schema
 - ✅ 多代理流水线框架（Generator → Verifier → Formatter）
 - ✅ Batch API 支持框架（待完善文件上传）
-- ⏳ 真正的 API 调用（需要配置 API Key）
+- ✅ 真正的 API 调用（需要配置 API Key）
 
 ## 下一步
 
 1. 添加图片资源处理（asset 协议）
-2. 完善 Settings 页面（API Key 配置 UI）
-3. DuckDB 分析引擎（当题库 > 1000 题时）
-4. 接入真正的 OpenAI API
+2. DuckDB 分析引擎（当题库 > 1000 题时）
+3. 间隔重复算法（Spaced Repetition）
+4. 练习模式增强（答题卡、计时器）

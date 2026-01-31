@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { initDb, Question, batchImportQuestions, getAllQuestions, QuestionAttempt, saveAttempt } from "./lib/db";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BookOpen, Brain, Settings, Upload, FileText, RefreshCw, Play } from "lucide-react";
+import { BookOpen, Brain, Settings as SettingsIcon, Upload, FileText, RefreshCw, Play } from "lucide-react";
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import { generateQuestionsFromText } from "./lib/ai";
 import { QuestionCard } from "./components/QuestionCard";
 import { PracticeMode } from "./components/PracticeMode";
+import { Settings } from "./components/Settings";
 
 type View = 'dashboard' | 'practice' | 'settings';
 
@@ -129,7 +130,7 @@ function App() {
               Practice
             </Button>
             <Button variant="ghost" className="w-full justify-start" onClick={() => setCurrentView('settings')}>
-              <Settings className="mr-2 h-4 w-4" />
+              <SettingsIcon className="mr-2 h-4 w-4" />
               Settings
             </Button>
           </nav>
@@ -141,7 +142,35 @@ function App() {
     );
   }
 
-  // Dashboard View
+  // Settings View
+  if (currentView === 'settings') {
+    return (
+      <div className="flex h-screen bg-slate-50 dark:bg-slate-950">
+        <aside className="w-64 border-r bg-white p-4 dark:bg-slate-900 border-slate-200 dark:border-slate-800 flex flex-col">
+          <h1 className="mb-8 text-2xl font-bold text-slate-900 dark:text-white">Shuati AI</h1>
+          <nav className="space-y-2 flex-1">
+            <Button variant="ghost" className="w-full justify-start" onClick={() => setCurrentView('dashboard')}>
+              <BookOpen className="mr-2 h-4 w-4" />
+              Library
+            </Button>
+            <Button variant="ghost" className="w-full justify-start" onClick={startPractice} disabled={questions.length === 0}>
+              <Brain className="mr-2 h-4 w-4" />
+              Practice
+            </Button>
+            <Button variant="default" className="w-full justify-start">
+              <SettingsIcon className="mr-2 h-4 w-4" />
+              Settings
+            </Button>
+          </nav>
+        </aside>
+        <main className="flex-1 overflow-y-auto">
+          <Settings />
+        </main>
+      </div>
+    );
+  }
+
+  // Dashboard View (default)
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950">
       {/* Sidebar */}
@@ -165,12 +194,12 @@ function App() {
             <Brain className="mr-2 h-4 w-4" />
             Practice
           </Button>
-          <Button 
-            variant={currentView === 'settings' ? 'default' : 'ghost'} 
+          <Button
+            variant={(currentView as View) === 'settings' ? 'default' : 'ghost'}
             className="w-full justify-start"
             onClick={() => setCurrentView('settings')}
           >
-            <Settings className="mr-2 h-4 w-4" />
+            <SettingsIcon className="mr-2 h-4 w-4" />
             Settings
           </Button>
         </nav>
